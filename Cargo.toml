@@ -1,0 +1,13 @@
+[package]
+name = "conduit"
+version = "0.1.0"
+edition = "2024"
+description = "A type-safe, zero-cost recursive pipeline engine for data transformation."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/KostasDas/conduit"
+readme = "README.md"
+
+keywords = ["pipeline", "data", "transformation", "type-safe", "generics"]
+categories = ["data-structures", "rust-patterns"]
+
+[dependencies]
