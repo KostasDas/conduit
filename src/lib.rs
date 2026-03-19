@@ -18,7 +18,7 @@ pub enum PipelineError {
 
 /// The core trait for all transformation logic.
 ///
-/// Any struct implementing `Stage` can be plugged into a [`Pipeline`].
+/// Any struct implementing `Step` can be plugged into a [`Pipeline`].
 pub trait Step {
     /// The type of data this stage accepts.
     type Input;
@@ -36,18 +36,22 @@ pub struct Pipeline<S> {
     steps: S,
 }
 
+impl Pipeline<()> {
+    /// Starts the construction of a new pipeline.
+    ///
+    /// To ensure type safety, the user must specify the initial input type:
+    /// `Pipeline::builder::<i32>()`
+    pub fn builder<I>() -> PipelineBuilder<NoOp<I>> {
+        PipelineBuilder {
+            start_node: NoOp::new(),
+        }
+    }
+}
+
 impl<S> Pipeline<S>
 where
     S: Step,
 {
-    /// Starts the construction of a new pipeline using a fluent builder API.
-    ///
-    /// # Arguments
-    /// * `stage` - The initial stage that defines the pipeline's input type.
-    pub fn builder(stage: S) -> PipelineBuilder<S> {
-        PipelineBuilder { start_node: stage }
-    }
-
     /// Feeds data into the start of the pipeline and returns the final result.
     ///
     /// This method executes all stages sequentially. Execution stops upon completion
@@ -62,7 +66,6 @@ where
     S: Step + 'static,
 {
     /// Erases the concrete type of the pipeline, returning a boxed trait object.
-    ///
     /// This is useful for storing different pipelines in a single collection as long as they share the same
     /// Input and Output types. The matching types can be bypassed by creating an
     /// Enum Wrapper of known Stages.
@@ -71,7 +74,7 @@ where
     }
 }
 
-/// A utility for assembling [`Stage`] implementations into a linear chain.
+/// A utility for assembling [`Step`] implementations into a linear chain.
 pub struct PipelineBuilder<S> {
     start_node: S,
 }
@@ -80,14 +83,7 @@ impl<S> PipelineBuilder<S>
 where
     S: Step,
 {
-    /// Creates a new builder starting with the provided stage.
-    pub fn new(stage: S) -> Self {
-        Self { start_node: stage }
-    }
-
     /// Appends a new stage to the end of the current pipeline.
-    ///
-    /// The new stage's `Input` must match the current pipeline's `Output`.
     pub fn add_stage<A>(self, action: A) -> PipelineBuilder<PipelineStep<S, A>>
     where
         A: Step<Input = S::Output>,
@@ -99,6 +95,7 @@ where
         PipelineBuilder { start_node: step }
     }
 
+    /// Appends a closure-based transformation to the pipeline.
     pub fn add_map<F, O>(
         self,
         f: F,
@@ -107,13 +104,10 @@ where
         F: Fn(S::Output) -> Result<O, PipelineError>,
     {
         let wrapper = ClosureStep::new(f);
-
         self.add_stage(wrapper)
     }
 
     /// Seals the pipeline and returns a runnable [`Pipeline`] instance.
-    ///
-    /// This finalizes the internal recursive structure and adds a termination node.
     pub fn build(self) -> Pipeline<impl Step<Input = S::Input, Output = S::Output>> {
         let final_chain = PipelineStep {
             current_step: self.start_node,
@@ -144,6 +138,7 @@ where
     }
 }
 
+/// A wrapper for anonymous closures to implement the [`Step`] trait.
 pub struct ClosureStep<F, I, O> {
     closure: F,
     _market: std::marker::PhantomData<(I, O)>,
@@ -171,7 +166,8 @@ where
         (self.closure)(input)
     }
 }
-/// An internal marker stage that terminates a pipeline chain by returning the input as-is.
+
+/// An internal marker stage that terminates or starts a pipeline chain.
 #[doc(hidden)]
 pub struct NoOp<T> {
     _marker: std::marker::PhantomData<T>,
@@ -198,7 +194,6 @@ impl<T> Step for NoOp<T> {
 mod tests {
     use super::*;
 
-    // --- Math Test Helpers ---
     struct MultiplyByTwo;
     struct SubtractTen;
 
@@ -218,13 +213,11 @@ mod tests {
         }
     }
 
-    // --- Complex Type Test Helpers ---
     #[derive(Debug, PartialEq)]
     struct RawUser {
         username: String,
         access_level: u8,
     }
-
     #[derive(Debug, PartialEq)]
     struct ProcessedUser {
         id: usize,
@@ -263,33 +256,32 @@ mod tests {
 
     #[test]
     fn test_math_pipeline() {
-        let pipe = Pipeline::builder(MultiplyByTwo)
+        let pipe = Pipeline::builder::<i32>()
+            .add_stage(MultiplyByTwo)
             .add_stage(SubtractTen)
             .build();
 
-        let result = pipe.run(20).unwrap();
-        assert_eq!(result, 30);
+        assert_eq!(pipe.run(20).unwrap(), 30);
     }
 
     #[test]
     fn test_heterogeneous_pipeline_vec() {
-        let pipe_a = Pipeline::builder(MultiplyByTwo)
+        let pipe_a = Pipeline::builder::<i32>()
+            .add_stage(MultiplyByTwo)
             .add_stage(SubtractTen)
             .build()
             .into_boxed();
 
-        let pipe_b = Pipeline::builder(MultiplyByTwo).build().into_boxed();
+        let pipe_b = Pipeline::builder::<i32>()
+            .add_stage(MultiplyByTwo)
+            .build()
+            .into_boxed();
 
         let pipeline_registry: Vec<Box<dyn Step<Input = i32, Output = i32>>> = vec![pipe_a, pipe_b];
-
-        assert_eq!(pipeline_registry.len(), 2);
-
-        let input = 20;
         let results: Vec<i32> = pipeline_registry
             .iter()
-            .map(|pipe| pipe.execute(input).unwrap())
+            .map(|p| p.execute(20).unwrap())
             .collect();
-
         assert_eq!(results, vec![30, 40]);
     }
 
@@ -304,7 +296,7 @@ mod tests {
             }
         }
 
-        let pipe = Pipeline::builder(FailStage).build();
+        let pipe = Pipeline::builder::<i32>().add_stage(FailStage).build();
         let result = pipe.run(10);
 
         match result {
@@ -315,7 +307,8 @@ mod tests {
 
     #[test]
     fn test_transformation_chain() {
-        let user_pipe = Pipeline::builder(SanitizeName)
+        let user_pipe = Pipeline::builder::<RawUser>()
+            .add_stage(SanitizeName)
             .add_stage(CreateProfile)
             .add_stage(ValidateId)
             .build();
@@ -324,15 +317,13 @@ mod tests {
             username: "  GUEST_USER  ".to_string(),
             access_level: 1,
         };
-
-        let result = user_pipe.run(input).unwrap();
-        assert!(result);
+        assert!(user_pipe.run(input).unwrap());
     }
 
     #[test]
     fn test_closure_only_pipeline() {
-        // A pipeline built entirely of anonymous closures
-        let pipe = Pipeline::builder(ClosureStep::new(|x: i32| Ok(x + 5)))
+        let pipe = Pipeline::builder::<i32>()
+            .add_map(|x| Ok(x + 5))
             .add_map(|x| Ok(x.to_string()))
             .build();
 
@@ -342,11 +333,10 @@ mod tests {
 
     #[test]
     fn test_mixed_struct_and_closure_pipeline() {
-        // mixing static structs with dynamic closures
-        let pipe = Pipeline::builder(MultiplyByTwo) // Struct
-            .add_stage(SubtractTen) // Struct
+        let pipe = Pipeline::builder::<i32>()
+            .add_stage(MultiplyByTwo)
+            .add_stage(SubtractTen)
             .add_map(|x| {
-                // Closure
                 if x < 0 {
                     Ok(format!("Negative: {}", x))
                 } else {
@@ -355,12 +345,7 @@ mod tests {
             })
             .build();
 
-        // (5 * 2) - 10 = 0 -> "Positive: 0"
-        let res1 = pipe.run(5).unwrap();
-        assert_eq!(res1, "Positive: 0");
-
-        // (2 * 2) - 10 = -6 -> "Negative: -6"
-        let res2 = pipe.run(2).unwrap();
-        assert_eq!(res2, "Negative: -6");
+        assert_eq!(pipe.run(5).unwrap(), "Positive: 0");
+        assert_eq!(pipe.run(2).unwrap(), "Negative: -6");
     }
 }
