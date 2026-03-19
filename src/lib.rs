@@ -1,16 +1,37 @@
+//! # Conduit
+//!
+//! `conduit` is a type-safe, zero-cost pipeline engine designed for structured
+//! data transformation.
+//!
+//! It uses a recursive, static-dispatch architecture to ensure that the
+//! entire transformation chain is validated at compile-time with no
+//! runtime overhead.
+
+/// Represents the various error states a pipeline stage can encounter.
 #[derive(Debug)]
 pub enum PipelineError {
+    /// An error that might be resolved by retrying the operation (e.g., a network timeout).
     Recoverable(String),
+    /// An error that cannot be resolved by retrying (e.g., a validation failure).
     Permanent(String),
 }
 
+/// The core trait for all transformation logic.
+///
+/// Any struct implementing `Stage` can be plugged into a [`Pipeline`].
 pub trait Stage {
+    /// The type of data this stage accepts.
     type Input;
+    /// The type of data this stage produces.
     type Output;
 
+    /// Executes the logic for this specific stage.
     fn execute(&self, input: Self::Input) -> Result<Self::Output, PipelineError>;
 }
 
+/// A completed execution chain that can process data.
+///
+/// Use [`Pipeline::builder`] to construct a new instance.
 pub struct Pipeline<S> {
     steps: S,
 }
@@ -19,10 +40,18 @@ impl<S> Pipeline<S>
 where
     S: Stage,
 {
+    /// Starts the construction of a new pipeline using a fluent builder API.
+    ///
+    /// # Arguments
+    /// * `stage` - The initial stage that defines the pipeline's input type.
     pub fn builder(stage: S) -> PipelineBuilder<S> {
         PipelineBuilder { start_node: stage }
     }
 
+    /// Feeds data into the start of the pipeline and returns the final result.
+    ///
+    /// This method executes all stages sequentially. Execution stops upon completion
+    /// or on PipelineError
     pub fn run(&self, input: S::Input) -> Result<S::Output, PipelineError> {
         self.steps.execute(input)
     }
@@ -32,11 +61,17 @@ impl<S> Pipeline<S>
 where
     S: Stage + 'static,
 {
+    /// Erases the concrete type of the pipeline, returning a boxed trait object.
+    ///
+    /// This is useful for storing different pipelines in a single collection as long as they share the same
+    /// Input and Output types. The matching types can be bypassed by creating an
+    /// Enum Wrapper of known Stages.
     pub fn into_boxed(self) -> Box<dyn Stage<Input = S::Input, Output = S::Output>> {
         Box::new(self.steps)
     }
 }
 
+/// A utility for assembling [`Stage`] implementations into a linear chain.
 pub struct PipelineBuilder<S> {
     start_node: S,
 }
@@ -45,10 +80,14 @@ impl<S> PipelineBuilder<S>
 where
     S: Stage,
 {
+    /// Creates a new builder starting with the provided stage.
     pub fn new(stage: S) -> Self {
         Self { start_node: stage }
     }
 
+    /// Appends a new stage to the end of the current pipeline.
+    ///
+    /// The new stage's `Input` must match the current pipeline's `Output`.
     pub fn add_stage<A>(self, action: A) -> PipelineBuilder<PipelineStep<S, A>>
     where
         A: Stage<Input = S::Output>,
@@ -60,6 +99,9 @@ where
         PipelineBuilder { start_node: step }
     }
 
+    /// Seals the pipeline and returns a runnable [`Pipeline`] instance.
+    ///
+    /// This finalizes the internal recursive structure and adds a termination node.
     pub fn build(self) -> Pipeline<impl Stage<Input = S::Input, Output = S::Output>> {
         let final_chain = PipelineStep {
             current_step: self.start_node,
@@ -70,6 +112,7 @@ where
     }
 }
 
+/// An internal wrapper that links two stages together.
 #[doc(hidden)]
 pub struct PipelineStep<Current, Next> {
     current_step: Current,
@@ -89,6 +132,7 @@ where
     }
 }
 
+/// An internal marker stage that terminates a pipeline chain by returning the input as-is.
 #[doc(hidden)]
 pub struct End<T> {
     _marker: std::marker::PhantomData<T>,
@@ -177,8 +221,6 @@ mod tests {
             Ok(input.id > 0)
         }
     }
-
-    // --- Tests ---
 
     #[test]
     fn test_math_pipeline() {
