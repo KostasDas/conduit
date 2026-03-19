@@ -27,8 +27,22 @@ pub trait Step {
 
     /// Executes the logic for this specific stage.
     fn execute(&self, input: Self::Input) -> Result<Self::Output, PipelineError>;
+    /// Decorates this step with a policy
+    fn with<P>(self, policy: P) -> P::Decorated
+    where
+        P: Policy<Self>,
+        Self: Sized,
+    {
+        policy.apply(self)
+    }
 }
-
+/// Policy trait, decorates a step with some extra behavior, such as retrying or logging
+///
+/// Any struct implementing `Policy` can be plugged into a [`Pipeline`].
+pub trait Policy<S: Step> {
+    type Decorated: Step<Input = S::Input, Output = S::Output>;
+    fn apply(self, step: S) -> Self::Decorated;
+}
 /// A completed execution chain that can process data.
 ///
 /// Use [`Pipeline::builder`] to construct a new instance.
@@ -190,6 +204,59 @@ impl<T> Step for NoOp<T> {
     }
 }
 
+pub struct Retry {
+    max_retries: usize,
+}
+
+impl Retry {
+    pub fn times(n: usize) -> Self {
+        Self { max_retries: n }
+    }
+}
+
+impl<S: Step> Policy<S> for Retry
+where
+    S::Input: Clone,
+{
+    type Decorated = RetryStep<S>;
+    fn apply(self, step: S) -> Self::Decorated {
+        RetryStep {
+            max_retries: 1 + self.max_retries,
+            inner: step,
+        }
+    }
+}
+
+pub struct RetryStep<S> {
+    inner: S,
+    max_retries: usize,
+}
+
+impl<S> Step for RetryStep<S>
+where
+    S: Step,
+    S::Input: Clone,
+{
+    type Input = S::Input;
+    type Output = S::Output;
+
+    fn execute(&self, input: Self::Input) -> Result<Self::Output, PipelineError> {
+        let mut last_err = None;
+        for _ in 0..self.max_retries {
+            match self.inner.execute(input.clone()) {
+                Ok(output) => return Ok(output),
+                Err(PipelineError::Permanent(e)) => return Err(PipelineError::Permanent(e)),
+                Err(PipelineError::Recoverable(e)) => {
+                    last_err = Some(PipelineError::Recoverable(e))
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            PipelineError::Permanent("Retry logic exhausted with no attempts".to_string())
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +414,81 @@ mod tests {
 
         assert_eq!(pipe.run(5).unwrap(), "Positive: 0");
         assert_eq!(pipe.run(2).unwrap(), "Negative: -6");
+    }
+    #[test]
+    fn test_retry_logic_success_after_flaking() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // We use Arc/Atomic to track calls across the cloned executions
+        struct FlakyStep(Arc<AtomicUsize>);
+        impl Step for FlakyStep {
+            type Input = i32;
+            type Output = i32;
+            fn execute(&self, input: i32) -> Result<i32, PipelineError> {
+                let attempts = self.0.fetch_add(1, Ordering::SeqCst);
+                if attempts < 2 {
+                    Err(PipelineError::Recoverable("Flaky".to_string()))
+                } else {
+                    Ok(input + 1)
+                }
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let pipe = Pipeline::builder::<i32>()
+            // Retry 2 times means 3 total attempts
+            .add_stage(FlakyStep(counter.clone()).with(Retry::times(2)))
+            .build();
+
+        let res = pipe.run(10).unwrap();
+        assert_eq!(res, 11);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_retry_logic_exhaustion() {
+        struct AlwaysFail;
+        impl Step for AlwaysFail {
+            type Input = i32;
+            type Output = i32;
+            fn execute(&self, _: i32) -> Result<i32, PipelineError> {
+                Err(PipelineError::Recoverable("Persistent Glitch".to_string()))
+            }
+        }
+
+        let pipe = Pipeline::builder::<i32>()
+            .add_stage(AlwaysFail.with(Retry::times(2)))
+            .build();
+
+        match pipe.run(10) {
+            Err(PipelineError::Recoverable(e)) => assert_eq!(e, "Persistent Glitch"),
+            _ => panic!("Expected recoverable error after exhaustion"),
+        }
+    }
+
+    #[test]
+    fn test_retry_logic_stops_on_permanent() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct PermanentFail(Arc<AtomicUsize>);
+        impl Step for PermanentFail {
+            type Input = i32;
+            type Output = i32;
+            fn execute(&self, _: i32) -> Result<i32, PipelineError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(PipelineError::Permanent("Fatal".to_string()))
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let pipe = Pipeline::builder::<i32>()
+            .add_stage(PermanentFail(counter.clone()).with(Retry::times(10)))
+            .build();
+
+        let _ = pipe.run(10);
+        // Even with 10 retries, it should stop after the 1st attempt
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 }
