@@ -122,6 +122,8 @@ where
     }
 
     /// Seals the pipeline and returns a runnable [`Pipeline`] instance.
+    ///
+    /// This finalizes the internal recursive structure and adds a termination node.
     pub fn build(self) -> Pipeline<impl Step<Input = S::Input, Output = S::Output>> {
         let final_chain = PipelineStep {
             current_step: self.start_node,
@@ -204,11 +206,13 @@ impl<T> Step for NoOp<T> {
     }
 }
 
+/// A configuration for retrying a [`Step`] when encountering recoverable errors.
 pub struct Retry {
     max_retries: usize,
 }
 
 impl Retry {
+    /// Configures a policy to retry a step a specific number of times.
     pub fn times(n: usize) -> Self {
         Self { max_retries: n }
     }
@@ -227,6 +231,7 @@ where
     }
 }
 
+/// An internal wrapper that executes retry logic for a decorated step.
 pub struct RetryStep<S> {
     inner: S,
     max_retries: usize,
