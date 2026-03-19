@@ -99,6 +99,15 @@ where
         PipelineBuilder { start_node: step }
     }
 
+    pub fn add_map<F, O>(self, f: F) -> PipelineBuilder<PipelineStep<S, MapStage<F, S::Output, O>>>
+    where
+        F: Fn(S::Output) -> Result<O, PipelineError>,
+    {
+        let wrapper = MapStage::new(f);
+
+        self.add_stage(wrapper)
+    }
+
     /// Seals the pipeline and returns a runnable [`Pipeline`] instance.
     ///
     /// This finalizes the internal recursive structure and adds a termination node.
@@ -132,6 +141,33 @@ where
     }
 }
 
+pub struct MapStage<F, I, O> {
+    closure: F,
+    _market: std::marker::PhantomData<(I, O)>,
+}
+
+impl<F, I, O> MapStage<F, I, O>
+where
+    F: Fn(I) -> Result<O, PipelineError>,
+{
+    fn new(closure: F) -> Self {
+        MapStage {
+            closure,
+            _market: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<F, I, O> Stage for MapStage<F, I, O>
+where
+    F: Fn(I) -> Result<O, PipelineError>,
+{
+    type Input = I;
+    type Output = O;
+    fn execute(&self, input: Self::Input) -> Result<Self::Output, PipelineError> {
+        (self.closure)(input)
+    }
+}
 /// An internal marker stage that terminates a pipeline chain by returning the input as-is.
 #[doc(hidden)]
 pub struct End<T> {
@@ -289,5 +325,40 @@ mod tests {
 
         let result = user_pipe.run(input).unwrap();
         assert!(result);
+    }
+
+    #[test]
+    fn test_closure_only_pipeline() {
+        // A pipeline built entirely of anonymous closures
+        let pipe = Pipeline::builder(MapStage::new(|x: i32| Ok(x + 5)))
+            .add_map(|x| Ok(x.to_string()))
+            .build();
+
+        let result = pipe.run(10).unwrap();
+        assert_eq!(result, "15");
+    }
+
+    #[test]
+    fn test_mixed_struct_and_closure_pipeline() {
+        // mixing static structs with dynamic closures
+        let pipe = Pipeline::builder(MultiplyByTwo) // Struct
+            .add_stage(SubtractTen) // Struct
+            .add_map(|x| {
+                // Closure
+                if x < 0 {
+                    Ok(format!("Negative: {}", x))
+                } else {
+                    Ok(format!("Positive: {}", x))
+                }
+            })
+            .build();
+
+        // (5 * 2) - 10 = 0 -> "Positive: 0"
+        let res1 = pipe.run(5).unwrap();
+        assert_eq!(res1, "Positive: 0");
+
+        // (2 * 2) - 10 = -6 -> "Negative: -6"
+        let res2 = pipe.run(2).unwrap();
+        assert_eq!(res2, "Negative: -6");
     }
 }
