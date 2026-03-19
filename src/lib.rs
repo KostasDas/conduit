@@ -19,7 +19,7 @@ pub enum PipelineError {
 /// The core trait for all transformation logic.
 ///
 /// Any struct implementing `Stage` can be plugged into a [`Pipeline`].
-pub trait Stage {
+pub trait Step {
     /// The type of data this stage accepts.
     type Input;
     /// The type of data this stage produces.
@@ -38,7 +38,7 @@ pub struct Pipeline<S> {
 
 impl<S> Pipeline<S>
 where
-    S: Stage,
+    S: Step,
 {
     /// Starts the construction of a new pipeline using a fluent builder API.
     ///
@@ -59,14 +59,14 @@ where
 
 impl<S> Pipeline<S>
 where
-    S: Stage + 'static,
+    S: Step + 'static,
 {
     /// Erases the concrete type of the pipeline, returning a boxed trait object.
     ///
     /// This is useful for storing different pipelines in a single collection as long as they share the same
     /// Input and Output types. The matching types can be bypassed by creating an
     /// Enum Wrapper of known Stages.
-    pub fn into_boxed(self) -> Box<dyn Stage<Input = S::Input, Output = S::Output>> {
+    pub fn into_boxed(self) -> Box<dyn Step<Input = S::Input, Output = S::Output>> {
         Box::new(self.steps)
     }
 }
@@ -78,7 +78,7 @@ pub struct PipelineBuilder<S> {
 
 impl<S> PipelineBuilder<S>
 where
-    S: Stage,
+    S: Step,
 {
     /// Creates a new builder starting with the provided stage.
     pub fn new(stage: S) -> Self {
@@ -90,7 +90,7 @@ where
     /// The new stage's `Input` must match the current pipeline's `Output`.
     pub fn add_stage<A>(self, action: A) -> PipelineBuilder<PipelineStep<S, A>>
     where
-        A: Stage<Input = S::Output>,
+        A: Step<Input = S::Output>,
     {
         let step = PipelineStep {
             current_step: self.start_node,
@@ -99,11 +99,14 @@ where
         PipelineBuilder { start_node: step }
     }
 
-    pub fn add_map<F, O>(self, f: F) -> PipelineBuilder<PipelineStep<S, MapStage<F, S::Output, O>>>
+    pub fn add_map<F, O>(
+        self,
+        f: F,
+    ) -> PipelineBuilder<PipelineStep<S, ClosureStep<F, S::Output, O>>>
     where
         F: Fn(S::Output) -> Result<O, PipelineError>,
     {
-        let wrapper = MapStage::new(f);
+        let wrapper = ClosureStep::new(f);
 
         self.add_stage(wrapper)
     }
@@ -111,10 +114,10 @@ where
     /// Seals the pipeline and returns a runnable [`Pipeline`] instance.
     ///
     /// This finalizes the internal recursive structure and adds a termination node.
-    pub fn build(self) -> Pipeline<impl Stage<Input = S::Input, Output = S::Output>> {
+    pub fn build(self) -> Pipeline<impl Step<Input = S::Input, Output = S::Output>> {
         let final_chain = PipelineStep {
             current_step: self.start_node,
-            next_step: End::new(),
+            next_step: NoOp::new(),
         };
 
         Pipeline { steps: final_chain }
@@ -128,10 +131,10 @@ pub struct PipelineStep<Current, Next> {
     next_step: Next,
 }
 
-impl<Current, Next> Stage for PipelineStep<Current, Next>
+impl<Current, Next> Step for PipelineStep<Current, Next>
 where
-    Current: Stage,
-    Next: Stage<Input = Current::Output>,
+    Current: Step,
+    Next: Step<Input = Current::Output>,
 {
     type Input = Current::Input;
     type Output = Next::Output;
@@ -141,24 +144,24 @@ where
     }
 }
 
-pub struct MapStage<F, I, O> {
+pub struct ClosureStep<F, I, O> {
     closure: F,
     _market: std::marker::PhantomData<(I, O)>,
 }
 
-impl<F, I, O> MapStage<F, I, O>
+impl<F, I, O> ClosureStep<F, I, O>
 where
     F: Fn(I) -> Result<O, PipelineError>,
 {
     fn new(closure: F) -> Self {
-        MapStage {
+        ClosureStep {
             closure,
             _market: std::marker::PhantomData,
         }
     }
 }
 
-impl<F, I, O> Stage for MapStage<F, I, O>
+impl<F, I, O> Step for ClosureStep<F, I, O>
 where
     F: Fn(I) -> Result<O, PipelineError>,
 {
@@ -170,11 +173,11 @@ where
 }
 /// An internal marker stage that terminates a pipeline chain by returning the input as-is.
 #[doc(hidden)]
-pub struct End<T> {
+pub struct NoOp<T> {
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T> End<T> {
+impl<T> NoOp<T> {
     fn new() -> Self {
         Self {
             _marker: std::marker::PhantomData,
@@ -182,7 +185,7 @@ impl<T> End<T> {
     }
 }
 
-impl<T> Stage for End<T> {
+impl<T> Step for NoOp<T> {
     type Input = T;
     type Output = T;
 
@@ -199,7 +202,7 @@ mod tests {
     struct MultiplyByTwo;
     struct SubtractTen;
 
-    impl Stage for MultiplyByTwo {
+    impl Step for MultiplyByTwo {
         type Input = i32;
         type Output = i32;
         fn execute(&self, input: i32) -> Result<i32, PipelineError> {
@@ -207,7 +210,7 @@ mod tests {
         }
     }
 
-    impl Stage for SubtractTen {
+    impl Step for SubtractTen {
         type Input = i32;
         type Output = i32;
         fn execute(&self, input: i32) -> Result<i32, PipelineError> {
@@ -229,7 +232,7 @@ mod tests {
     }
 
     struct SanitizeName;
-    impl Stage for SanitizeName {
+    impl Step for SanitizeName {
         type Input = RawUser;
         type Output = String;
         fn execute(&self, input: RawUser) -> Result<String, PipelineError> {
@@ -238,7 +241,7 @@ mod tests {
     }
 
     struct CreateProfile;
-    impl Stage for CreateProfile {
+    impl Step for CreateProfile {
         type Input = String;
         type Output = ProcessedUser;
         fn execute(&self, input: String) -> Result<ProcessedUser, PipelineError> {
@@ -250,7 +253,7 @@ mod tests {
     }
 
     struct ValidateId;
-    impl Stage for ValidateId {
+    impl Step for ValidateId {
         type Input = ProcessedUser;
         type Output = bool;
         fn execute(&self, input: ProcessedUser) -> Result<bool, PipelineError> {
@@ -277,8 +280,7 @@ mod tests {
 
         let pipe_b = Pipeline::builder(MultiplyByTwo).build().into_boxed();
 
-        let pipeline_registry: Vec<Box<dyn Stage<Input = i32, Output = i32>>> =
-            vec![pipe_a, pipe_b];
+        let pipeline_registry: Vec<Box<dyn Step<Input = i32, Output = i32>>> = vec![pipe_a, pipe_b];
 
         assert_eq!(pipeline_registry.len(), 2);
 
@@ -294,7 +296,7 @@ mod tests {
     #[test]
     fn test_recoverable_error_flow() {
         struct FailStage;
-        impl Stage for FailStage {
+        impl Step for FailStage {
             type Input = i32;
             type Output = i32;
             fn execute(&self, _: i32) -> Result<i32, PipelineError> {
@@ -330,7 +332,7 @@ mod tests {
     #[test]
     fn test_closure_only_pipeline() {
         // A pipeline built entirely of anonymous closures
-        let pipe = Pipeline::builder(MapStage::new(|x: i32| Ok(x + 5)))
+        let pipe = Pipeline::builder(ClosureStep::new(|x: i32| Ok(x + 5)))
             .add_map(|x| Ok(x.to_string()))
             .build();
 
