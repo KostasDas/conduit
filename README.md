@@ -2,8 +2,8 @@
 
 `conduit` is a type-safe pipeline engine for Rust, designed for high-performance structured data transformation. 
 
-It utilizes recursive type composition to ensure the transformation chain is validated at compile-time
-If it compiles, the types fit, and the data flows—with **zero runtime overhead**.
+It utilizes recursive type composition to ensure the transformation chain is validated at compile-time.
+If it compiles, the types fit, and the data flows with **zero runtime overhead**.
 
 ---
 
@@ -23,7 +23,7 @@ By default, `Conduit` comes with just one policy: retries. It is meant to serve 
 A `Step` is a discrete unit of transformation. It defines what it takes in and what it produces.
 
 ```rust
-use conduit::{Step, PipelineError};
+use conduit::prelude::*;
 
 struct MultiplyByTwo;
 
