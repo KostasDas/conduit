@@ -498,4 +498,132 @@ mod tests {
         // Even with 10 retries, it should stop after the 1st attempt
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
+    #[test]
+    fn test_policy_order_logger_outside_retry() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let step_counter = Arc::new(AtomicUsize::new(0));
+        let logger_counter = Arc::new(AtomicUsize::new(0));
+
+        struct FlakyStep(Arc<AtomicUsize>);
+        impl Step for FlakyStep {
+            type Input = i32;
+            type Output = i32;
+            fn execute(&self, input: i32) -> Result<i32, PipelineError> {
+                let count = self.0.fetch_add(1, Ordering::SeqCst);
+                if count < 2 {
+                    Err(PipelineError::Recoverable("fail".into()))
+                } else {
+                    Ok(input)
+                }
+            }
+        }
+
+        // 3. Define a Mock Logger Policy
+        struct MockLogger(Arc<AtomicUsize>);
+        impl<S: Step> Policy<S> for MockLogger {
+            type Decorated = MockLoggerStep<S>;
+            fn apply(self, step: S) -> Self::Decorated {
+                MockLoggerStep {
+                    inner: step,
+                    counter: self.0,
+                }
+            }
+        }
+        struct MockLoggerStep<S> {
+            inner: S,
+            counter: Arc<AtomicUsize>,
+        }
+        impl<S: Step> Step for MockLoggerStep<S> {
+            type Input = S::Input;
+            type Output = S::Output;
+            fn execute(&self, input: Self::Input) -> Result<Self::Output, PipelineError> {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                self.inner.execute(input)
+            }
+        }
+
+        // TEST: [Logger [Retry [Step]]]
+        // The logger wraps the entire Retry block.
+        let pipe = Pipeline::builder::<i32>()
+            .add_stage(
+                FlakyStep(step_counter.clone())
+                    .with(Retry::times(2)) // Inner layer
+                    .with(MockLogger(logger_counter.clone())), // Outer layer
+            )
+            .build();
+
+        let res = pipe.run(10).unwrap();
+
+        // The step was attempted 3 times (2 fails + 1 success)
+        assert_eq!(step_counter.load(Ordering::SeqCst), 3);
+        // The Logger was only called ONCE because it sits outside the retry loop
+        assert_eq!(logger_counter.load(Ordering::SeqCst), 1);
+        assert_eq!(res, 10);
+    }
+
+    #[test]
+    fn test_policy_order_logger_inside_retry() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let step_counter = Arc::new(AtomicUsize::new(0));
+        let logger_counter = Arc::new(AtomicUsize::new(0));
+
+        struct FlakyStep(Arc<AtomicUsize>);
+        impl Step for FlakyStep {
+            type Input = i32;
+            type Output = i32;
+            fn execute(&self, input: i32) -> Result<i32, PipelineError> {
+                let count = self.0.fetch_add(1, Ordering::SeqCst);
+                if count < 2 {
+                    Err(PipelineError::Recoverable("fail".into()))
+                } else {
+                    Ok(input)
+                }
+            }
+        }
+
+        struct MockLogger(Arc<AtomicUsize>);
+        impl<S: Step> Policy<S> for MockLogger {
+            type Decorated = MockLoggerStep<S>;
+            fn apply(self, step: S) -> Self::Decorated {
+                MockLoggerStep {
+                    inner: step,
+                    counter: self.0,
+                }
+            }
+        }
+        struct MockLoggerStep<S> {
+            inner: S,
+            counter: Arc<AtomicUsize>,
+        }
+        impl<S: Step> Step for MockLoggerStep<S> {
+            type Input = S::Input;
+            type Output = S::Output;
+            fn execute(&self, input: Self::Input) -> Result<Self::Output, PipelineError> {
+                self.counter.fetch_add(1, Ordering::SeqCst);
+                self.inner.execute(input)
+            }
+        }
+
+        // TEST: [Retry [Logger [Step]]]
+        // The Retry loop wraps the Logger.
+        let pipe = Pipeline::builder::<i32>()
+            .add_stage(
+                FlakyStep(step_counter.clone())
+                    .with(MockLogger(logger_counter.clone())) // Inner layer
+                    .with(Retry::times(2)), // Outer layer
+            )
+            .build();
+
+        let res = pipe.run(10).unwrap();
+
+        // The step was attempted 3 times
+        assert_eq!(step_counter.load(Ordering::SeqCst), 3);
+        // The Logger was also called 3 times because it is INSIDE the retry loop
+        assert_eq!(logger_counter.load(Ordering::SeqCst), 3);
+        assert_eq!(res, 10);
+    }
 }
