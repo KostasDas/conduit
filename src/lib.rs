@@ -153,8 +153,7 @@ where
         self.next_step.execute(res)
     }
 }
-
-/// A wrapper for anonymous closures to implement the [`Step`] trait.
+#[doc(hidden)]
 pub struct ClosureStep<F, I, O> {
     closure: F,
     _market: std::marker::PhantomData<(I, O)>,
@@ -232,6 +231,7 @@ where
 }
 
 /// An internal wrapper that executes retry logic for a decorated step.
+#[doc(hidden)]
 pub struct RetryStep<S> {
     inner: S,
     max_retries: usize,
@@ -261,7 +261,9 @@ where
         }))
     }
 }
-
+pub mod prelude {
+    pub use crate::{Pipeline, PipelineBuilder, PipelineError, Policy, Retry, Step};
+}
 #[cfg(test)]
 mod tests {
     use super::*;
