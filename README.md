@@ -121,9 +121,9 @@ Because Conduit uses generics and recursive structures, the "cost" of adding a s
 
 ### Type Erasure and Collections
 
-Pipelines use complex, nested generic types (e.g., `PipelineStep<NoOp<i32>, RetryStep<MultiplyByTwo>>`). While this is great for performance, it makes it difficult to store different pipelines in a single collection. Conduit provides two ways to handle this.
+Pipelines use generic type composition to chain steps together. While this is great for performance, it makes it difficult to store different pipelines in a single collection. Conduit provides a way to handle this.
 
-#### 1. The `into_boxed` Method
+#### The `into_boxed` Method
 If your pipelines share the same **Input** and **Output** types, you can erase the internal structure using `into_boxed`. This returns a `Box<dyn Step<Input = I, Output = O>>`.
 
 ```rust
@@ -134,36 +134,31 @@ let pipe_b = Pipeline::builder::<i32>().add_map(|x| Ok(x + 1)).build().into_boxe
 let inventory: Vec<Box<dyn Step<Input = i32, Output = i32>>> = vec![pipe_a, pipe_b];
 ```
 
-#### 2. The Enum Wrapper (Static Dispatch)
-If you want to bypass the need for trait objects entirely or handle pipelines with different signatures, use an Enum Wrapper. This is the "Conduit Way" to maintain high performance while grouping diverse pipelines.
+The limitation of this method is that all pipelines must share the same input and output types, otherwise it's impossible to add them in a collection.
+To bypass this, use an enum wrapper for your Pipelines
 
 ```rust
-/// A collection of known transformation pipelines
-enum UserProcessingTask {
-    Registration(Pipeline<PipelineStep<NoOp<RawUser>, SanitizeName>>),
-    Deletion(Pipeline<PipelineStep<NoOp<UserId>, DatabaseDeleteStep>>),
+enum UserPipelines {
+    // We store the pipeline as a trait object
+    Registration(Box<dyn Step<Input = RawUser, Output = String>>),
+    Deletion(Box<dyn Step<Input = UserId, Output = ()>>),
 }
 
-impl UserProcessingTask {
-    // You can implement a uniform execution interface
-    fn run_task(self, input: UserInput) -> Result<(), PipelineError> {
-        match self {
-            Self::Registration(p) => {
-                let user = input.into_raw();
-                p.run(user).map(|_| ())
-            },
-            Self::Deletion(p) => {
-                let id = input.into_id();
-                p.run(id).map(|_| ())
-            }
-        }
+impl UserPipelines {
+    fn new_registration() -> Self {
+        let pipe = Pipeline::builder::<RawUser>()
+            .add_stage(SanitizeName)
+            .build()
+            .into_boxed();
+            
+        Self::Registration(pipe)
     }
 }
 ```
 
 
 ### Shameless plug: Conduit + Kraquen
-**Conduit** pairs perfectly with **[Kraquen](https://github.com/KostasDas/kraquen)**—our thread-safe, generic queue. While Conduit defines **how** data is transformed, Kraquen handles **when** and **where** it is processed.
+**Conduit** pairs perfectly with **[Kraquen](https://github.com/KostasDas/kraquen)** our thread-safe, generic queue. While Conduit defines **how** data is transformed, Kraquen handles **when** and **where** it is processed.
 
 ### The "Factory Line" Demo
 Use Kraquen to pass data between threads and Conduit to perform the work at each stage (this is not meant to be an executable example, just a demo)
