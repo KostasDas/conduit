@@ -1,5 +1,5 @@
 [package]
-name = "conduit"
+name = "static-conduit"
 version = "0.1.0"
 edition = "2024"
 description = "A type-safe, zero-cost recursive pipeline engine for data transformation."

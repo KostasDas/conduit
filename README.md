@@ -23,7 +23,7 @@ By default, `Conduit` comes with just one policy: retries. It is meant to serve 
 A `Step` is a discrete unit of transformation. It defines what it takes in and what it produces.
 
 ```rust
-use conduit::prelude::*;
+use static_conduit::prelude::*;
 
 struct MultiplyByTwo;
 
@@ -166,7 +166,7 @@ Use Kraquen to pass data between threads and Conduit to perform the work at each
 #[test]
 fn test_conduit_kraquen_flow() {
     use kraquen::{Queue, QueueMode};
-    use conduit::prelude::*;
+    use static_conduit::prelude::*;
     
     let intake = Queue::new(QueueMode::FIFO);
     let outbox = Queue::new(QueueMode::FIFO);
