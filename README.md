@@ -1,6 +1,6 @@
-# Conduit
+# Static-Conduit
 
-`conduit` is a type-safe pipeline engine for Rust, designed for high-performance structured data transformation. 
+`Static-Conduit` is a type-safe pipeline engine for Rust, designed for high-performance structured data transformation. 
 
 It utilizes recursive type composition to ensure the transformation chain is validated at compile-time.
 If it compiles, the types fit, and the data flows with **zero runtime overhead**.
@@ -12,7 +12,7 @@ If it compiles, the types fit, and the data flows with **zero runtime overhead**
 * **Static over Dynamic:** No `Box<dyn Step>` or trait objects are used in the core pipeline. Everything is resolved at compile-time.
 * **Pipeline Steps:**. Define your pipeline steps by implementing the `Step` trait. It is also possible to just use a closure for simple tasks.
 * **Decorator Pattern for custom Policies:** Define your own data transformation policies by implementing the `Policy` trait. Retrying, timing out, logging, anything is possible. This keeps your business logic (the `Step`) pure and separated from infrastructure concerns. Note that policies are not available for closures, only for steps.
-By default, `Conduit` comes with just one policy: retries. It is meant to serve as an example.
+By default, `Static-Conduit` comes with just one policy: retries. It is meant to serve as an example.
 * **Inference-First:** Once you define your initial input type, the rest of the pipeline infers its types automatically. No more redundant type annotations.
 
 ---
@@ -54,7 +54,7 @@ assert_eq!(result, 35); // (20 * 2) - 5
 
 ## Advanced: Policies & Reliability
 
-Conduit allows you to "decorate" any concrete `Step` with a `Policy` using the `.with()` method. This wraps the step in new logic without changing its Input/Output contract.
+`Static-conduit` allows you to "decorate" any concrete `Step` with a `Policy` using the `.with()` method. This wraps the step in new logic without changing its Input/Output contract.
 
 ### The Retry Policy
 The `Retry` policy intercepts `Recoverable` errors and re-executes the step.
@@ -111,17 +111,17 @@ impl<S: Step> Step for LoggingStep<S> {
 ## Architectural Details
 
 ### Error Handling
-Conduit distinguishes between two types of failures:
+`Static-Conduit` distinguishes between two types of failures:
 * **`PipelineError::Recoverable`**: Signals that a policy (like `Retry`) should attempt to fix the issue.
 * **`PipelineError::Permanent`**: Signals a fatal flaw (like validation failure). The pipeline stops immediately, bypassing all retry logic.
 
 ### Zero-Cost Abstractions
-Because Conduit uses generics and recursive structures, the "cost" of adding a stage is purely a compile-time cost. At runtime, there is no performance difference between a Conduit pipeline and a manually written sequence of function calls.
+Because `Static-Conduit` uses generics and recursive structures, the "cost" of adding a stage is purely a compile-time cost. At runtime, there is no performance difference between a Conduit pipeline and a manually written sequence of function calls.
 
 
 ### Type Erasure and Collections
 
-Pipelines use generic type composition to chain steps together. While this is great for performance, it makes it difficult to store different pipelines in a single collection. Conduit provides a way to handle this.
+Pipelines use generic type composition to chain steps together. While this is great for performance, it makes it difficult to store different pipelines in a single collection. `Static-Conduit` provides a way to handle this.
 
 #### The `into_boxed` Method
 If your pipelines share the same **Input** and **Output** types, you can erase the internal structure using `into_boxed`. This returns a `Box<dyn Step<Input = I, Output = O>>`.
@@ -157,8 +157,8 @@ impl UserPipelines {
 ```
 
 
-### Shameless plug: Conduit + Kraquen
-**Conduit** pairs perfectly with **[Kraquen](https://github.com/KostasDas/kraquen)** our thread-safe, generic queue. While Conduit defines **how** data is transformed, Kraquen handles **when** and **where** it is processed.
+### Shameless plug: Static-Conduit + Kraquen
+**Static-Conduit** pairs perfectly with **[Kraquen](https://github.com/KostasDas/kraquen)** our thread-safe, generic queue. While Conduit defines **how** data is transformed, Kraquen handles **when** and **where** it is processed.
 
 ### The "Factory Line" Demo
 Use Kraquen to pass data between threads and Conduit to perform the work at each stage (this is not meant to be an executable example, just a demo)
